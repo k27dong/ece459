@@ -1,0 +1,23 @@
+# The Optimization on CNN using GPU and CUDA
+
+## Summary
+
+The changes focus on migrating the computation done in `cpu.rs` to GPU for better performance. When the `cuda` input flag is stated, the code would invoke the initialization code in `cuda.rs` and its `compute()` function to call the GPU with the CUDA code in `kernel.cu`. By doing this, instead of performing the computational work along with the rust executables on cpu, the three layers of CNN would be computed on GPU and resulting in shorter runtime. The GPU is carefully initialized with the proper 'grid size' and 'block size'.
+
+## Tech Details
+
+### The Implementation on the CNN
+
+The CNN contains three layers: the Convolution layer, the ReLU layer, and the Output layer. Since the ReLU layer's task is very simple (converting negative values to zero), I've decided to combine the first two layers into one. The `convolution_relu_layer` computes the dot product between the input and the filter, on this step, I passed the two layers entirely and divided the computation into grids to perform the calculation concurrently. By splitting each block in the grid, the entire 100x100 input data are split into multiple areas of 20x20 smaller blocks, then I can use `threadIdx.x` and `threadIdx.y` to get the dimension value on the input. I've set the grid size to 10 (10x1) so that the grid number represents the filter coordinate, thus by simply getting `blockIdx.x`, I can find out which filter I should use in the calculation. Therefore, each CUDA function is responsible for calculating the dot value between one filter and one 5x5 area on the input data. Additionally, since the calculation is independent to each other (that is, the order of the addition when calculating the dot value does not matter), I put `#pragma unroll` to inform the GPU that all the iterations in the for loop can happen at the same time. The ReLU layer is processed in one line with the function `#define NEG_TO_ZERO(x) (x = (x < 0 ? 0.0 : x))` along with the Convolution layer before saving the output value to the array, this method allows the two layers to be combined into one and minimized the processing time. Notice that although setting the block size to a multiple of 32 is recommended, but since the input data is 100x100, setting it to a multiple of 32 and manually calculating the coordinate would be slower than setting it directly to 20x20, even when the current size would result in some loss in the GPU computing power.
+
+The Output layer is implemented in a similar manner, where the grid size is set to 10 corresponding to each layer in the weight vector, yet in this case since there are a total of 4000 data to be processed in each layer, it's possible for me to set the thread number to a multiple of 32 (`32x125=4000`). By doing this, each layer is split into 32 smaller regions, which needs to be sum into one. I chose to keep all the 32 intermediate values in the GPU because if I need to perform addition between different threads I would have to use the very expensive `atomicAdd` function. It would generally be better to perform the addition in rust when all the threads are done. Finally I added the `#pragma unroll` for the same reason in the previous layer.
+
+## Test on Correctness
+
+For testing, I wrote a shell script named `do.sh` under the project directory and used it to automatically test the code on both performance and correctness. I ran the script on `ecetesla1` and saved the result in `result.png`. In the script the program would first compile, then perform the test multiple times (based on the variable `test_num`) as it first generate a sample input using `generate.py`, then run the compiled executable `lab3` on the newly generated `cnn.csv` and `in.csv` both with the `cpu` and `cuda` flag. The scipt would save the time used on both commands, in the end it runs `compare.py` on `out.csv` and `out_cuda.csv` to see if the cuda output matches the expected output.
+
+Since the calculation on this lab hardly has any 'edge cases' as it's simply working on mathematical equaltions, this test script ensures the code I wrote does have the expected behavior. By increasing the `test_num` and using the `compare` python script, the code's correctness is checked.
+
+## Test on Performance
+
+The shell script also checks on performance, from the output we can see that on `ecetesla1`, the cpu version usually takes ~26000 ms to finish, but the cuda version only takes **~11800** ms. By carefully choosing the grid size and block size when calling the GPU, and executing the proper command on the kernel, the code performs amazingly and shortens the run time by some 55%.
